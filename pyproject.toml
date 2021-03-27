@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "deep-learning-for-multimodal-image-retrieval"
+version = "0.1.0"
+description = ""
+authors = ["Quentin Fortier <qpfortier@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.7"
+gensim = "^4.0.0"
+jupyter = "^1.0.0"
+stop-words = "^2018.7.23"
+python-Levenshtein = "^0.12.2"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
