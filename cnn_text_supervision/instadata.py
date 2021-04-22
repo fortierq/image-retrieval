@@ -30,4 +30,4 @@ class InstaData(Dataset):
         f = self.data[i]
         img = Image.open(Path(f"../InstaCities1M/img_resized_1M/cities_instagram") / f.with_suffix(".jpg")).convert('RGB')
         caption = torch.from_numpy(np.loadtxt(str(self.path_caption / self.caption_type / f)))
-        return f.stem, self.preprocess(img), caption
+        return self.preprocess(img), caption
