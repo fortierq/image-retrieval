@@ -1,16 +1,17 @@
 # Embed captions with word2vec
-
+# TODO: use pretrained model?
 ## Load and preprocess captions
 
 ```python
 import numpy as np
+import torch
 import pandas as pd
 from pathlib import Path
 import re
 
 dir_root = Path().resolve().parent
-dir_data = dir_root / "data"
-dir_captions = dir_data / "captions"
+dir_captions = dir_root / "data" / "captions"
+dir_vectors = Path().resolve() / "vectors"
 ```
 
 ```python
@@ -95,12 +96,13 @@ iplot([go.Scatter(x=x_vals, y=y_vals, mode='text', text=labels)])
 
 ```python
 def representation(wv, caption):  # return the vector representation of caption
-    words = [wv.get_vector(w) for w in preprocess(caption) if w in wv.key_to_index]
+    words = [torch.from_numpy(wv.get_vector(w)) 
+             for w in preprocess(caption) if w in wv.key_to_index]
     if len(words) > 0:
-        v = np.sum(words, axis=0)
-        v -= min(v)
+        v = torch.stack(words).sum(axis=0)
+        v = v - v.min()
         if max(v) != 0:
-            v /= max(v)
+            v = v / max(v)
         return v
 ```
 
@@ -115,7 +117,11 @@ for dir_city in dir_captions.iterdir():
                 mode = "validate"
             if n >= 75_000:
                 mode = "test"
-            file = Path().resolve() / f"vectors/{mode}/{dir_city.name}/{file_caption.name}"
+            file = dir_vectors / f"{mode}/{dir_city.name}/{file_caption.name}"
             Path(file.parent).mkdir(parents=True, exist_ok=True)
-            np.savetxt(str(file), v)
+            torch.save(v, str(file))
+```
+
+```python
+
 ```
