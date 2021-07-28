@@ -3,11 +3,14 @@
 ## Load and preprocess captions
 
 ```python
-import re
+import numpy as np
+import pandas as pd
 from pathlib import Path
+import re
 
 dir_root = Path().resolve().parent
-dir_captions = dir_root / "data" / "captions"
+dir_data = dir_root / "data"
+dir_captions = dir_data / "captions"
 ```
 
 ```python
@@ -42,19 +45,17 @@ from gensim.models import Word2Vec
 captions = Captions(dir_captions)
 model = Word2Vec(sentences=captions,
                  vector_size=50,
-                 window=4, 
-                 min_count=10, 
+                 min_count=2, 
                  workers=12)
 model.save("model_captions")
 ```
 
 ```python
-model.corpus_count  # number of captions
+print(f"Number of captions: {model.corpus_count}")
+print(f"Number of words: {len(model.wv)}")
 ```
 
 ```python
-import pandas as pd
-
 pd.DataFrame({"caption": model.wv.index_to_key, 
               "count": map(lambda w: model.wv.get_vecattr(w, "count"), model.wv.index_to_key)
              }) \
@@ -77,66 +78,26 @@ model.wv.similar_by_vector(model.wv.get_vector('actor') + model.wv.get_vector('w
 ```
 
 ```python
-from sklearn.decomposition import IncrementalPCA    # inital reduction
-from sklearn.manifold import TSNE                   # final reduction
-import numpy as np                                  # array handling
-
-
+from sklearn.manifold import TSNE
+from plotly.offline import init_notebook_mode, iplot, plot
+import plotly.graph_objs as go
+    
 def reduce_2d(model):
-    vectors = TSNE(n_components=2).fit_transform(np.asarray(model.wv.vectors))
-    return [v[0] for v in vectors], [v[1] for v in vectors], np.asarray(model.wv.index_to_key)
+    vectors = TSNE(n_components=2).fit_transform(np.asarray(model.wv.vectors[10:50]))
+    return [v[0] for v in vectors], [v[1] for v in vectors], np.asarray(model.wv.index_to_key[10:50])
 
 x_vals, y_vals, labels = reduce_2d(model)
-
-def plot_with_plotly(x_vals, y_vals, labels, plot_in_notebook=True):
-    from plotly.offline import init_notebook_mode, iplot, plot
-    import plotly.graph_objs as go
-
-    trace = go.Scatter(x=x_vals, y=y_vals, mode='text', text=labels)
-    data = [trace]
-
-    if plot_in_notebook:
-        init_notebook_mode(connected=True)
-        iplot(data, filename='word-embedding-plot')
-    else:
-        plot(data, filename='word-embedding-plot.html')
-
-
-def plot_with_matplotlib(x_vals, y_vals, labels):
-    import matplotlib.pyplot as plt
-    import random
-
-    random.seed(0)
-
-    plt.figure(figsize=(12, 12))
-    plt.scatter(x_vals, y_vals)
-
-    #
-    # Label randomly subsampled 25 data points
-    #
-    indices = list(range(len(labels)))
-    selected_indices = random.sample(indices, 25)
-    for i in selected_indices:
-        plt.annotate(labels[i], (x_vals[i], y_vals[i]))
-
-try:
-    get_ipython()
-except Exception:
-    plot_function = plot_with_matplotlib
-else:
-    plot_function = plot_with_plotly
-
-plot_function(x_vals, y_vals, labels)
-
+init_notebook_mode(connected=True)
+iplot([go.Scatter(x=x_vals, y=y_vals, mode='text', text=labels)])
 ```
 
 ## Save vectors
 
 ```python
-def repr(caption):  # return a vector representation of a caption
+def representation(wv, caption):  # return the vector representation of caption
     words = [wv.get_vector(w) for w in preprocess(caption) if w in wv.key_to_index]
     if len(words) > 0:
-        v = np.sum(words, axis=0)  # sum of vector representations of words
+        v = np.sum(words, axis=0)
         v -= min(v)
         if max(v) != 0:
             v /= max(v)
@@ -144,17 +105,17 @@ def repr(caption):  # return a vector representation of a caption
 ```
 
 ```python
-for dir_city in dir_root / "InstaCities1M/captions_resized_1M/cities_instagram").iterdir():
-    n = 0
-    for file_img in dir_city.iterdir():
-        v = repr(file_img.read_text())
+# we store embedded captions and split them in train, validate, test
+for dir_city in dir_captions.iterdir():
+    for n, file_caption in enumerate(dir_city.iterdir()):
+        v = representation(model.wv, file_caption.read_text())
         if v is not None:
             mode = "train"
-            if 85_000 > n > 80_000:
+            if n > 70_000:
                 mode = "validate"
-            elif n >= 85_000:
+            if n >= 75_000:
                 mode = "test"
-            file = Path(__file__).parent / f"caption/{mode}/{dir_city.name}/{file_img.name}"
+            file = Path().resolve() / f"vectors/{mode}/{dir_city.name}/{file_caption.name}"
             Path(file.parent).mkdir(parents=True, exist_ok=True)
             np.savetxt(str(file), v)
 ```
