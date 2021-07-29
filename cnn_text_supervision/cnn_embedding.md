@@ -26,8 +26,6 @@ for i, f in enumerate(islice(dir_images.rglob("*.jpg"), 9)):
     plt.axis("off")
     caption = (dir_captions / f.relative_to(dir_images).with_suffix(".txt")).read_text()
     plt.title(caption[:30] + "\n" + caption[30:60])
-    categories[top5_catid[i]], top5_prob[i].item())
-
     plt.imshow(PIL.Image.open(f))
 ```
 
@@ -64,44 +62,92 @@ class ImageDataset(torch.utils.data.Dataset):
 dataset = ImageDataset("train")
 print(f"Shape of an image: {dataset[0][0].shape}")
 print(f"Shape of an embedded caption vector: {dataset[0][1].shape}")
+ndim = dataset[0][1].shape[0]
 ```
 
 ```python
 dataloaders = dict()
-for mode in "validate", :#"train", "test":
-    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=11, shuffle=True, num_workers=8, pin_memory=True)
+for mode in "validate", "train", "test":
+    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=1, shuffle=True, num_workers=8, pin_memory=True)
 ```
 
-```python
-img, vector = next(iter(dataloaders["validate"]))
-```
-
-## Use pretrained ResNet
+## Use ResNet50 pretrained on ImageNet
 
 ```python
 resnet = torchvision.models.resnet50(pretrained=True)
 ```
 
+Let's see some predictions of the ResNet on our images:
+
 ```python
 !wget https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt
 
+img, vector = next(iter(dataloaders["test"]))
 with open("imagenet_classes.txt", "r") as f:
     categories = [s.strip() for s in f.readlines()]
 # Show top categories per image
 top5_prob, top5_catid = torch.topk(resnet(img)[0], 5)
 
-figure = plt.figure(figsize=(12, 12))
+figure = plt.figure(figsize=(16, 4))
 predictions = resnet(img)
-for i, p in islice(enumerate(predictions), 9):
-    figure.add_subplot(3, 3, i+1)
+for i, p in islice(enumerate(predictions), 4):
+    figure.add_subplot(1, 4, i+1)
     plt.axis("off")
     top5_prob, top5_catid = torch.topk(p, 1)
     plt.title(categories[top5_catid[0]])
     plt.imshow(img[i].permute(1, 2, 0).clip(.0, 1.))
 ```
 
+# Model Fine-tuning
+
 ```python
-len(ImageDataset("train"))
+resnet.fc = torch.nn.Linear(resnet.fc.in_features, ndim) # the model should output in the word vector space
+resnet = resnet.to(device)
+```
+
+```python
+import copy
+
+def train_model(model, criterion, optimizer, scheduler, dataloaders, num_epochs=5):
+    best_model_wts = copy.deepcopy(model.state_dict())
+    best_acc = 0.0
+    for epoch in range(num_epochs):
+        print(f"Epoch {epoch}/{num_epochs - 1}")
+        for phase in ['train', 'validate']:
+            if phase == 'train': model.train()
+            else: model.eval()
+            running_loss = 0.0
+            running_corrects = 0
+            for inputs, labels in dataloaders[phase]:
+                inputs, labels = inputs.to(device), labels.to(device)
+                optimizer.zero_grad()
+                with torch.set_grad_enabled(phase == 'train'):
+                    outputs = model(inputs)
+                    _, preds = torch.max(outputs, 1)
+                    loss = criterion(outputs, labels)
+                    if phase == 'train':
+                        loss.backward()
+                        optimizer.step()
+                running_loss += loss.item() * inputs.size(0)
+                running_corrects += torch.sum(preds == labels.data)
+            if phase == 'train': scheduler.step()
+            epoch_loss = running_loss / dataset_sizes[phase]
+            epoch_acc = running_corrects.double() / dataset_sizes[phase]
+            print(f"{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}")
+            if phase == 'validate' and epoch_acc > best_acc:
+                best_acc = epoch_acc
+                best_model_wts = copy.deepcopy(model.state_dict())
+        print()
+    print(f"Best val Acc: {best_acc:4f}")
+    model.load_state_dict(best_model_wts)
+    return model
+```
+
+```python
+criterion = torch.nn.CrossEntropyLoss()
+optimizer = torch.optim.SGD(resnet.parameters(), lr=0.001, momentum=0.9)
+exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+model = train_model(resnet, criterion, optimizer, exp_lr_scheduler, dataloaders)
 ```
 
 ```python
