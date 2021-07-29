@@ -3,8 +3,7 @@
 ```python
 import matplotlib.pyplot as plt
 import PIL
-import torch
-import torchvision
+import torch, torchvision
 from pathlib import Path
 
 dir_root = Path().resolve().parent
@@ -27,10 +26,12 @@ for i, f in enumerate(islice(dir_images.rglob("*.jpg"), 9)):
     plt.axis("off")
     caption = (dir_captions / f.relative_to(dir_images).with_suffix(".txt")).read_text()
     plt.title(caption[:30] + "\n" + caption[30:60])
+    categories[top5_catid[i]], top5_prob[i].item())
+
     plt.imshow(PIL.Image.open(f))
 ```
 
-## Define PyTorch Dataset
+## Load dataset
 
 ```python
 from torchvision import transforms
@@ -60,8 +61,47 @@ class ImageDataset(torch.utils.data.Dataset):
 ```
 
 ```python
+dataset = ImageDataset("train")
 print(f"Shape of an image: {dataset[0][0].shape}")
 print(f"Shape of an embedded caption vector: {dataset[0][1].shape}")
+```
+
+```python
+dataloaders = dict()
+for mode in "validate", :#"train", "test":
+    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=11, shuffle=True, num_workers=8, pin_memory=True)
+```
+
+```python
+img, vector = next(iter(dataloaders["validate"]))
+```
+
+## Use pretrained ResNet
+
+```python
+resnet = torchvision.models.resnet50(pretrained=True)
+```
+
+```python
+!wget https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt
+
+with open("imagenet_classes.txt", "r") as f:
+    categories = [s.strip() for s in f.readlines()]
+# Show top categories per image
+top5_prob, top5_catid = torch.topk(resnet(img)[0], 5)
+
+figure = plt.figure(figsize=(12, 12))
+predictions = resnet(img)
+for i, p in islice(enumerate(predictions), 9):
+    figure.add_subplot(3, 3, i+1)
+    plt.axis("off")
+    top5_prob, top5_catid = torch.topk(p, 1)
+    plt.title(categories[top5_catid[0]])
+    plt.imshow(img[i].permute(1, 2, 0).clip(.0, 1.))
+```
+
+```python
+len(ImageDataset("train"))
 ```
 
 ```python
