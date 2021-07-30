@@ -1,8 +1,9 @@
 # Embed captions with word2vec
-# TODO: use pretrained model?
+
 ## Load and preprocess captions
 
 ```python
+import gensim
 import numpy as np
 import torch
 import pandas as pd
@@ -17,8 +18,8 @@ dir_vectors = Path().resolve() / "vectors"
 ```python
 from gensim.parsing.preprocessing import remove_stopwords
 
-def preprocess(w):  # remove stop words, non-ASCII and lower characters from w
-    return remove_stopwords(re.sub("[^a-zA-Z ]", '', w).lower())
+def preprocess(w): # remove stop words, hashtags, non-ASCII and lower characters from w
+    return remove_stopwords(re.sub("[^a-zA-Z ]", '', w.replace('#', ' ')).lower())
 ```
 
 ```python
@@ -96,30 +97,42 @@ iplot([go.Scatter(x=x_vals, y=y_vals, mode='text', text=labels)])
 
 ```python
 def representation(wv, caption):  # return the vector representation of caption
-    words = [torch.from_numpy(wv.get_vector(w)) 
-             for w in preprocess(caption) if w in wv.key_to_index]
+    words = [wv.get_vector(w) for w in preprocess(caption) if w in wv.key_to_index]
     if len(words) > 0:
-        v = torch.stack(words).sum(axis=0)
-        v = v - v.min()
+        v = np.sum(words, axis=0)
+        v -= min(v)
         if max(v) != 0:
-            v = v / max(v)
+            v /= max(v)
         return v
+```
+
+```python
+def rm_tree(pth):
+    pth = Path(pth)
+    for child in pth.glob('*'):
+        if child.is_file():
+            child.unlink()
+        else:
+            rm_tree(child)
+    pth.rmdir()
+rm_tree(dir_vectors)
 ```
 
 ```python
 # we store embedded captions and split them in train, validate, test
 for dir_city in dir_captions.iterdir():
-    for n, file_caption in enumerate(dir_city.iterdir()):
+    for n, file_caption in itertools.islice(enumerate(dir_city.iterdir()), 1000): 
+        # only 1000 vectors for testing
         v = representation(model.wv, file_caption.read_text())
         if v is not None:
             mode = "train"
-            if n > 70_000:
+            if n > 70:
                 mode = "validate"
             if n >= 75_000:
                 mode = "test"
             file = dir_vectors / f"{mode}/{dir_city.name}/{file_caption.name}"
             Path(file.parent).mkdir(parents=True, exist_ok=True)
-            torch.save(v, str(file))
+            np.savetxt(str(file), v)
 ```
 
 ```python
