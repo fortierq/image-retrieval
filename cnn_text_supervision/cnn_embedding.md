@@ -47,10 +47,7 @@ ndim = dataset[0][1].shape[0]
 ```
 
 ```python
-dataloaders = dict()
-for mode in "validate", "train":
-    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode, dir_images, dir_caption_vectors), batch_size=8, shuffle=True, num_workers=8, pin_memory=True)
-    print(f"{mode}: {len(dataloaders[mode])} batchs")
+
 ```
 
 ## Use ResNet50 pretrained on ImageNet
@@ -90,10 +87,10 @@ resnet = resnet.to(device)
 
 ```python
 def train_model(model, device, criterion, optimizer, scheduler, dataloaders, num_epochs=5):
-    running_loss = .0
     for epoch in range(num_epochs):
         print(f"Epoch {epoch}/{num_epochs - 1}")
         for phase in ['train', 'validate']:
+            running_loss = .0
             if phase == 'train': model.train()
             else: model.eval()
             for inputs, labels in dataloaders[phase]:
@@ -114,8 +111,13 @@ def train_model(model, device, criterion, optimizer, scheduler, dataloaders, num
 ```
 
 ```python
+dataloaders = dict()
+for mode in "validate", "train":
+    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode, dir_images, dir_caption_vectors), batch_size=8, shuffle=True, num_workers=8, pin_memory=True)
+    print(f"{mode}: {len(dataloaders[mode])} batchs")
+
 criterion = torch.nn.BCEWithLogitsLoss().to(device)
-optimizer = torch.optim.SGD(resnet.parameters(), lr=0.001, momentum=0.9)
+optimizer = torch.optim.Adam(resnet.parameters(), lr=0.01)
 exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 model = train_model(resnet, device, criterion, optimizer, exp_lr_scheduler, dataloaders)
 ```
