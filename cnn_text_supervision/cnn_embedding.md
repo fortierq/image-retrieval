@@ -36,18 +36,38 @@ for i, f in enumerate(islice(dir_images.rglob("*.jpg"), 9)):
 ## Load dataset
 
 ```python
-from dataset import ImageDataset
+import torchvision.transforms as transforms
+import PIL
+
+class ImageDataset(torch.utils.data.Dataset):
+    def __init__(self, mode): # mode is "train", "validate" or "test"
+        self.dir_images = dir_images
+        self.dir_target = dir_caption_vectors / mode
+        self.data = [f.relative_to(self.dir_target) 
+                     for f in self.dir_target.rglob("*.txt")]
+        self.preprocess = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            # transforms.Resize(256), # If we want the crop to be more centered
+            # transforms.CenterCrop(224), # This makes more sense for testing
+            transforms.RandomCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # ImageNet stats
+        ])
+
+    def __len__(self): return len(self.data)
+
+    def __getitem__(self, i):
+        f = self.data[i]
+        img = PIL.Image.open(self.dir_images / f.with_suffix(".jpg")).convert('RGB')
+        caption_vector = torch.from_numpy(np.loadtxt(str(self.dir_target / f)))
+        return self.preprocess(img), caption_vector
 ```
 
 ```python
-dataset = ImageDataset("train", dir_images, dir_caption_vectors)
+dataset = ImageDataset("train")
 print(f"Shape of an image: {dataset[0][0].shape}")
 print(f"Shape of an embedded caption vector: {dataset[0][1].shape}")
 ndim = dataset[0][1].shape[0]
-```
-
-```python
-
 ```
 
 ## Use ResNet50 pretrained on ImageNet
@@ -80,15 +100,13 @@ for i, p in islice(enumerate(predictions), 4):
 # Model Fine-tuning
 
 ```python
-resnet = torchvision.models.resnet50(pretrained=True)
-resnet.fc = torch.nn.Linear(resnet.fc.in_features, ndim) # the model should output in the word vector space
-resnet = resnet.to(device)
+
 ```
 
 ```python
-def train_model(model, device, criterion, optimizer, scheduler, dataloaders, num_epochs=5):
-    for epoch in range(num_epochs):
-        print(f"Epoch {epoch}/{num_epochs - 1}")
+def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
+    for epoch in range(1, num_epochs):
+        print(f"\nEpoch {epoch}/{num_epochs}")
         for phase in ['train', 'validate']:
             running_loss = .0
             if phase == 'train': model.train()
@@ -102,24 +120,25 @@ def train_model(model, device, criterion, optimizer, scheduler, dataloaders, num
                     if phase == 'train':
                         loss.backward()
                         optimizer.step()
-                running_loss += loss.item() * inputs.size(0)
-            if phase == 'train': scheduler.step()
-            epoch_loss = running_loss / len(dataloaders[phase])
-            print(f"{phase} Loss: {epoch_loss:.4f}")
-        print()
+                running_loss += loss.item()
+            print(f"{phase} Loss: {running_loss / len(dataloaders[phase]):.4f}")
     return model
 ```
 
 ```python
+resnet = torchvision.models.resnet18(pretrained=True)
+resnet.fc = torch.nn.Linear(resnet.fc.in_features, ndim) # the model should output in the word vector space
+resnet = resnet.to(device)
+if torch.cuda.device_count() > 1:
+    resnet = torch.nn.DataParallel(resnet)
+
 dataloaders = dict()
 for mode in "validate", "train":
-    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode, dir_images, dir_caption_vectors), batch_size=8, shuffle=True, num_workers=8, pin_memory=True)
-    print(f"{mode}: {len(dataloaders[mode])} batchs")
-
+    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=8, num_workers=8, shuffle=True, pin_memory=True)
+    print(f"{mode}: {len(dataloaders[mode])} batchs of size {dataloaders[mode].batch_size}")
 criterion = torch.nn.BCEWithLogitsLoss().to(device)
-optimizer = torch.optim.Adam(resnet.parameters(), lr=0.01)
-exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
-model = train_model(resnet, device, criterion, optimizer, exp_lr_scheduler, dataloaders)
+optimizer = torch.optim.SGD(resnet.parameters(), .01, momentum=.9, weight_decay=1e-4) #torch.optim.Adam(resnet.parameters(), lr=0.01)
+model = train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=20)
 ```
 
 ```python
