@@ -11,9 +11,11 @@ from pathlib import Path
 import numpy as np
 
 dir_root = Path().resolve().parent
-dir_caption_vectors = dir_root / "word2vec_model" / "vectors"
+dir_word_embedding = dir_root / "word2vec_model"
+dir_caption_vectors = dir_word_embedding / "vectors"
 dir_images = dir_root / "data" / "img_resized"
 dir_captions = dir_root / "data" / "captions"
+dir_image_vectors = dir_root / "cnn_text_supervision" / "vectors"
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 device
@@ -60,7 +62,7 @@ class ImageDataset(torch.utils.data.Dataset):
         f = self.data[i]
         img = PIL.Image.open(self.dir_images / f.with_suffix(".jpg")).convert('RGB')
         caption_vector = torch.from_numpy(np.loadtxt(str(self.dir_target / f)))
-        return self.preprocess(img), caption_vector
+        return f.stem, self.preprocess(img).float(), caption_vector.float()
 ```
 
 ```python
@@ -100,18 +102,14 @@ for i, p in islice(enumerate(predictions), 4):
 # Model Fine-tuning
 
 ```python
-
-```
-
-```python
 def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
-    for epoch in range(1, num_epochs):
+    for epoch in range(1, num_epochs+1):
         print(f"\nEpoch {epoch}/{num_epochs}")
-        for phase in ['train', 'validate']:
+        for phase in ['validate', 'train']:
             running_loss = .0
             if phase == 'train': model.train()
             else: model.eval()
-            for inputs, labels in dataloaders[phase]:
+            for _, inputs, labels in dataloaders[phase]:
                 inputs, labels = inputs.to(device), labels.to(device)
                 optimizer.zero_grad()
                 with torch.set_grad_enabled(phase == 'train'):
@@ -126,21 +124,67 @@ def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
 ```
 
 ```python
-resnet = torchvision.models.resnet18(pretrained=True)
-resnet.fc = torch.nn.Linear(resnet.fc.in_features, ndim) # the model should output in the word vector space
+resnet = torchvision.models.resnet50(pretrained=True)
+resnet.fc = torch.nn.Linear(resnet.fc.in_features, 40) # the model should output in the word vector space
 resnet = resnet.to(device)
 if torch.cuda.device_count() > 1:
     resnet = torch.nn.DataParallel(resnet)
 
 dataloaders = dict()
 for mode in "validate", "train":
-    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=8, num_workers=8, shuffle=True, pin_memory=True)
+    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=12, num_workers=8, shuffle=True, pin_memory=True)
     print(f"{mode}: {len(dataloaders[mode])} batchs of size {dataloaders[mode].batch_size}")
-criterion = torch.nn.BCEWithLogitsLoss().to(device)
-optimizer = torch.optim.SGD(resnet.parameters(), .01, momentum=.9, weight_decay=1e-4) #torch.optim.Adam(resnet.parameters(), lr=0.01)
-model = train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=20)
+criterion = torch.nn.MSELoss().to(device)
+optimizer = torch.optim.Adam(resnet.parameters(), lr=0.01)
+# torch.optim.SGD(resnet.parameters(), .01, momentum=.9, weight_decay=1e-4)
+resnet = train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=3)
 ```
 
 ```python
+resnet = torchvision.models.resnet18(pretrained=True)
+resnet = resnet.to("cuda")
+for _, img, _ in islice(iter(dataloaders["train"]), 5):
+    print((resnet(img.to("cuda"))))
+```
 
+```python
+for img_name, img, _ in dataloaders["validate"]:
+    vectors = model(img.to("cuda"))
+    for i, v in enumerate(vectors):
+        torch.save(v, dir_image_vectors / img_name[i])
+```
+
+```python
+import heapq as hq
+from gensim.models import Word2Vec
+
+word2vec = Word2Vec.load(str(dir_word_embedding / "model_captions"))
+query_vector = word2vec.wv.get_vector("house").copy()
+if min(query_vector) < 0:
+    query_vector -= min(query_vector)
+if max(query_vector) != 0:
+    query_vector /= max(query_vector)
+closest = []
+n_results = 5
+
+for img_name, img, _ in dataloaders["validate"]:
+    vectors = resnet.to("cpu")(img)
+    for i, v in enumerate(vectors):
+        d = np.sum((v.detach().numpy() - query_vector)**2)
+        if len(closest) < n_results:
+            hq.heappush(closest, (-d, id(v), img[i], v))
+        elif -closest[0][0] > d:
+            hq.heappushpop(closest, (-d, id(v), img[i], v))
+
+figure = plt.figure(figsize=(20, 4))
+for i, (nd, _, img, v) in enumerate(closest):
+    figure.add_subplot(1, 5, i+1)
+    plt.axis("off")
+    plt.imshow(img.permute(1, 2, 0).clip(.0, 1.))
+    plt.title(str(-nd))
+    print(v)
+```
+
+```python
+query_vector
 ```
