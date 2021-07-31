@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import PIL
 import torch, torchvision
 from pathlib import Path
+from itertools import islice
 import numpy as np
 
 dir_root = Path().resolve().parent
@@ -67,32 +68,35 @@ class ImageDataset(torch.utils.data.Dataset):
 
 ```python
 dataset = ImageDataset("train")
-print(f"Shape of an image: {dataset[0][0].shape}")
-print(f"Shape of an embedded caption vector: {dataset[0][1].shape}")
+print(f"Shape of an image: {dataset[0][1].shape}")
+print(f"Shape of an embedded caption vector: {dataset[0][2].shape}")
 ndim = dataset[0][1].shape[0]
 ```
 
 ## Use ResNet50 pretrained on ImageNet
 
-```python
-resnet = torchvision.models.resnet50(pretrained=True)
-```
 
 Let's see some predictions of the ResNet on our images:
 
 ```python
 !wget https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt
 
-img, vector = next(iter(dataloaders["validate"]))
+resnet = torchvision.models.resnet50(pretrained=True)
+dataloaders = dict()
+for mode in "validate", "train":
+    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=12, num_workers=8, shuffle=True, pin_memory=True)
+    print(f"{mode}: {len(dataloaders[mode])} batchs of size {dataloaders[mode].batch_size}")
+
+_, img, vector = next(iter(dataloaders["validate"]))
 with open("imagenet_classes.txt", "r") as f:
     categories = [s.strip() for s in f.readlines()]
 # Show top categories per image
 top5_prob, top5_catid = torch.topk(resnet(img)[0], 5)
 
-figure = plt.figure(figsize=(16, 4))
+figure = plt.figure(figsize=(20, 4))
 predictions = resnet(img)
-for i, p in islice(enumerate(predictions), 4):
-    figure.add_subplot(1, 4, i+1)
+for i, p in islice(enumerate(predictions), 5):
+    figure.add_subplot(1, 5, i+1)
     plt.axis("off")
     top5_prob, top5_catid = torch.topk(p, 1)
     plt.title(categories[top5_catid[0]])
@@ -120,31 +124,24 @@ def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
                         optimizer.step()
                 running_loss += loss.item()
             print(f"{phase} Loss: {running_loss / len(dataloaders[phase]):.4f}")
-    return model
 ```
 
 ```python
-resnet = torchvision.models.resnet50(pretrained=True)
-resnet.fc = torch.nn.Linear(resnet.fc.in_features, 40) # the model should output in the word vector space
+import model
+
+model = model.Model(embedding_dimensionality=40)
 resnet = resnet.to(device)
 if torch.cuda.device_count() > 1:
     resnet = torch.nn.DataParallel(resnet)
 
 dataloaders = dict()
 for mode in "validate", "train":
-    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=12, num_workers=8, shuffle=True, pin_memory=True)
+    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=10, num_workers=8, shuffle=True, pin_memory=True)
     print(f"{mode}: {len(dataloaders[mode])} batchs of size {dataloaders[mode].batch_size}")
-criterion = torch.nn.MSELoss().to(device)
-optimizer = torch.optim.Adam(resnet.parameters(), lr=0.01)
+criterion = torch.nn.MSELoss(reduction='sum').to(device)
+optimizer = torch.optim.Adam(resnet.parameters(), lr=0.1)
 # torch.optim.SGD(resnet.parameters(), .01, momentum=.9, weight_decay=1e-4)
-resnet = train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=3)
-```
-
-```python
-resnet = torchvision.models.resnet18(pretrained=True)
-resnet = resnet.to("cuda")
-for _, img, _ in islice(iter(dataloaders["train"]), 5):
-    print((resnet(img.to("cuda"))))
+train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=10)
 ```
 
 ```python
@@ -159,18 +156,14 @@ import heapq as hq
 from gensim.models import Word2Vec
 
 word2vec = Word2Vec.load(str(dir_word_embedding / "model_captions"))
-query_vector = word2vec.wv.get_vector("house").copy()
-if min(query_vector) < 0:
-    query_vector -= min(query_vector)
-if max(query_vector) != 0:
-    query_vector /= max(query_vector)
+query_vector = torch.from_numpy(word2vec.wv.get_vector("food")).to("cuda")
 closest = []
 n_results = 5
 
-for img_name, img, _ in dataloaders["validate"]:
-    vectors = resnet.to("cpu")(img)
+for img_name, img, _ in dataloaders["train"]:
+    vectors = resnet(img.to("cuda"))
     for i, v in enumerate(vectors):
-        d = np.sum((v.detach().numpy() - query_vector)**2)
+        d = ((v - query_vector)**2).sum(axis=0).item()
         if len(closest) < n_results:
             hq.heappush(closest, (-d, id(v), img[i], v))
         elif -closest[0][0] > d:
@@ -183,8 +176,4 @@ for i, (nd, _, img, v) in enumerate(closest):
     plt.imshow(img.permute(1, 2, 0).clip(.0, 1.))
     plt.title(str(-nd))
     print(v)
-```
-
-```python
-query_vector
 ```
