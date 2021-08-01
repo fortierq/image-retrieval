@@ -50,8 +50,6 @@ class ImageDataset(torch.utils.data.Dataset):
                      for f in self.dir_target.rglob("*.txt")]
         self.preprocess = transforms.Compose([
             transforms.RandomHorizontalFlip(),
-            # transforms.Resize(256), # If we want the crop to be more centered
-            # transforms.CenterCrop(224), # This makes more sense for testing
             transforms.RandomCrop(224),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # ImageNet stats
@@ -73,7 +71,7 @@ print(f"Shape of an embedded caption vector: {dataset[0][2].shape}")
 ndim = dataset[0][1].shape[0]
 ```
 
-## Use ResNet50 pretrained on ImageNet
+## Use ResNet pretrained on ImageNet
 
 
 Let's see some predictions of the ResNet on our images:
@@ -96,6 +94,7 @@ top5_prob, top5_catid = torch.topk(resnet(img)[0], 5)
 figure = plt.figure(figsize=(20, 4))
 predictions = resnet(img)
 for i, p in islice(enumerate(predictions), 5):
+    print(p[0])
     figure.add_subplot(1, 5, i+1)
     plt.axis("off")
     top5_prob, top5_catid = torch.topk(p, 1)
@@ -127,9 +126,10 @@ def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
 ```
 
 ```python
-import model
-
-model = model.Model(embedding_dimensionality=40)
+resnet = torchvision.models.resnet18(pretrained=True)
+for param in resnet.parameters():
+    param.requires_grad = False
+resnet.fc = torch.nn.Linear(resnet.fc.in_features, 40) # the model should output in the word vector space
 resnet = resnet.to(device)
 if torch.cuda.device_count() > 1:
     resnet = torch.nn.DataParallel(resnet)
@@ -139,9 +139,17 @@ for mode in "validate", "train":
     dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=10, num_workers=8, shuffle=True, pin_memory=True)
     print(f"{mode}: {len(dataloaders[mode])} batchs of size {dataloaders[mode].batch_size}")
 criterion = torch.nn.MSELoss(reduction='sum').to(device)
-optimizer = torch.optim.Adam(resnet.parameters(), lr=0.1)
+optimizer = torch.optim.Adam(resnet.fc.parameters(), lr=0.01)
 # torch.optim.SGD(resnet.parameters(), .01, momentum=.9, weight_decay=1e-4)
-train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=10)
+train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=5)
+```
+
+```python
+for param in resnet.parameters():
+    param.requires_grad = True
+optimizer = torch.optim.Adam(resnet.parameters(), lr=0.001)
+exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
+train_model(resnet, device, criterion, optimizer, dataloaders, exp_lr_scheduler, num_epochs=5)
 ```
 
 ```python
@@ -156,7 +164,7 @@ import heapq as hq
 from gensim.models import Word2Vec
 
 word2vec = Word2Vec.load(str(dir_word_embedding / "model_captions"))
-query_vector = torch.from_numpy(word2vec.wv.get_vector("food")).to("cuda")
+query_vector = torch.from_numpy(word2vec.wv.get_vector("sea")).to("cuda")
 closest = []
 n_results = 5
 
@@ -167,6 +175,7 @@ for img_name, img, _ in dataloaders["train"]:
         if len(closest) < n_results:
             hq.heappush(closest, (-d, id(v), img[i], v))
         elif -closest[0][0] > d:
+            print(-closest[0][0])
             hq.heappushpop(closest, (-d, id(v), img[i], v))
 
 figure = plt.figure(figsize=(20, 4))
@@ -175,5 +184,9 @@ for i, (nd, _, img, v) in enumerate(closest):
     plt.axis("off")
     plt.imshow(img.permute(1, 2, 0).clip(.0, 1.))
     plt.title(str(-nd))
-    print(v)
+    print(v - query_vector)
+```
+
+```python
+
 ```
