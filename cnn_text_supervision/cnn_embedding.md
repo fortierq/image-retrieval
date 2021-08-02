@@ -12,11 +12,8 @@ from itertools import islice
 import numpy as np
 
 dir_root = Path().resolve().parent
-dir_word_embedding = dir_root / "word2vec_model"
-dir_caption_vectors = dir_word_embedding / "vectors"
-dir_images = dir_root / "data" / "img_resized"
-dir_captions = dir_root / "data" / "captions"
-dir_image_vectors = dir_root / "cnn_text_supervision" / "vectors"
+import sys; sys.path.append(str(dir_root))
+from settings import Dir, Params
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 device
@@ -28,10 +25,10 @@ device
 from itertools import islice
 
 figure = plt.figure(figsize=(12, 12))
-for i, f in enumerate(islice(dir_images.rglob("*.jpg"), 9)):
+for i, f in enumerate(islice(Dir.images.rglob("*.jpg"), 9)):
     figure.add_subplot(3, 3, i+1)
     plt.axis("off")
-    caption = (dir_captions / f.relative_to(dir_images).with_suffix(".txt")).read_text()
+    caption = (Dir.captions / f.relative_to(Dir.images).with_suffix(".txt")).read_text()
     plt.title(caption[:30] + "\n" + caption[30:60])
     plt.imshow(PIL.Image.open(f))
 ```
@@ -44,7 +41,7 @@ import PIL
 
 class ImageDataset(torch.utils.data.Dataset):
     def __init__(self, mode): # mode is "train", "validate" or "test"
-        self.dir_target = dir_caption_vectors / mode
+        self.dir_target = Dir.caption_vectors / mode
         self.data = [f.relative_to(self.dir_target) 
                      for f in self.dir_target.rglob("*.txt")]
         self.preprocess = transforms.Compose([
@@ -58,7 +55,7 @@ class ImageDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, i):
         f = self.data[i]
-        img = PIL.Image.open(dir_images / f.with_suffix(".jpg")).convert('RGB')
+        img = PIL.Image.open(Dir.images / f.with_suffix(".jpg")).convert('RGB')
         caption_vector = torch.from_numpy(np.loadtxt(str(self.dir_target / f)))
         return str(f), self.preprocess(img).float(), caption_vector.float()
 ```
@@ -104,7 +101,10 @@ for i, p in islice(enumerate(predictions), 5):
 # Model Fine-tuning
 
 ```python
+from torch.utils.tensorboard import SummaryWriter
+
 def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
+    writer = SummaryWriter()
     for epoch in range(1, num_epochs+1):
         print(f"Epoch {epoch}/{num_epochs}")
         for phase in ['validate', 'train']:
@@ -121,11 +121,13 @@ def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
                         loss.backward()
                         optimizer.step()
                 running_loss += loss.item()
+            writer.add_scalar("Epoch/loss", epoch, running_loss / len(dataloaders[phase]))
             print(f"{phase} Loss: {running_loss / len(dataloaders[phase]):.4f}")
+    writer.flush()
 ```
 
 ```python
-resnet = torchvision.models.resnet18(pretrained=True)
+resnet = torchvision.models.resnet34(pretrained=True)
 for param in resnet.parameters():
     param.requires_grad = False
 
@@ -144,7 +146,7 @@ criterion = torch.nn.MSELoss(reduction="sum").to(device)
 # optimizer = torch.optim.SGD(resnet.fc.parameters(), .01, momentum=.9)
 optimizer = torch.optim.Adam(resnet.fc.parameters(), lr=0.01)
 # torch.optim.SGD(resnet.parameters(), .01, momentum=.9, weight_decay=1e-4)
-train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=10)
+train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=1)
 ```
 
 ```python
@@ -161,7 +163,13 @@ train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=10)
 ```python
 optimizer = torch.optim.Adam(resnet.parameters(), lr=1e-6)
 #exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
-train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=30)
+train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=1)
+```
+
+```python
+torch.save({'model_state_dict': resnet.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict()}, 
+           "models/resnet18_.pt")
 ```
 
 ```python
@@ -170,7 +178,7 @@ with torch.no_grad():
     for img_name, img, _ in dataloaders["test"]:
         vectors = resnet(img.to("cuda"))
         for i, v in enumerate(vectors):
-            path = dir_image_vectors / img_name[i]
+            path = Dir.image_vectors / img_name[i]
             path.parent.mkdir(exist_ok=True, parents=True)
             torch.save(v, str(path))
 ```
@@ -179,12 +187,12 @@ with torch.no_grad():
 import heapq as hq
 from gensim.models import Word2Vec
 
-word2vec = Word2Vec.load(str(dir_word_embedding / "model_captions"))
-query_vector = torch.from_numpy(word2vec.wv.get_vector("cake")).to("cuda")
+word2vec = Word2Vec.load(str(Dir.word_embedding / "model_captions"))
+query_vector = torch.from_numpy(word2vec.wv.get_vector("bridge")).to("cuda")
 closest = []
 n_results = 5
 
-for file_img in dir_image_vectors.rglob("*.txt"):
+for file_img in Dir.image_vectors.rglob("*.txt"):
     v = torch.load(file_img)
     d = ((v - query_vector)**2).sum(axis=0).item()
     if len(closest) < n_results:
@@ -196,7 +204,7 @@ figure = plt.figure(figsize=(20, 4))
 for i, (nd, file_img) in enumerate(closest):
     figure.add_subplot(1, 5, i+1)
     plt.axis("off")
-    path = dir_images / file_img.relative_to(dir_image_vectors).with_suffix(".jpg")
+    path = Dir.images / file_img.relative_to(Dir.image_vectors).with_suffix(".jpg")
     plt.imshow(PIL.Image.open(path).convert('RGB'))
     plt.title(str(-nd))
 ```

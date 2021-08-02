@@ -3,6 +3,9 @@
 ## Load and preprocess captions
 
 ```python
+%load_ext autoreload
+%autoreload 2
+
 from gensim.models import Word2Vec
 from gensim.parsing.preprocessing import remove_stopwords
 import numpy as np
@@ -13,26 +16,25 @@ import re
 import itertools
 
 dir_root = Path().resolve().parent
-dir_captions = dir_root / "data" / "captions"
-dir_vectors = Path().resolve() / "vectors"
+import sys; sys.path.append(str(dir_root))
+from settings import Dir, Params
 ```
 
 ```python
 def remove_useless(words):
-    return [w for w in words if w not in ['http','https','photo','picture','image','insta','instagram','post']]
+    return [w for w in words if w not in ['http','https','photo','picture','image','insta','instagram','instagood','post']]
 
 def preprocess(w): # remove stop words, hashtags, non-ASCII and lower characters from w
     return remove_stopwords(re.sub("[^a-zA-Z ]", '', w.replace('#', ' ')).lower())
 
 class Captions:  # iterator for captions
     def __iter__(self):
-        for f in Path(dir_captions).rglob("*.txt"):
-            yield preprocess(f.read_text()).split() # todo remove insta...
+        for f in Dir.captions.rglob("*.txt"):
+            yield remove_useless(preprocess(f.read_text()).split())
 ```
 
 ```python
-
-for c in itertools.islice(Captions(dir_captions), 5):
+for c in itertools.islice(Captions(), 5):
     print(c)  # show some captions
 ```
 
@@ -40,10 +42,8 @@ for c in itertools.islice(Captions(dir_captions), 5):
 
 ```python
 model = Word2Vec(sentences=Captions(),
-                 vector_size=40,
-                 min_count=5,
-                 epochs=25,
-                 window=8)
+                 vector_size=Params.dim_embedding,
+                 min_count=10)
 model.save("model_captions")
 ```
 
@@ -71,11 +71,11 @@ model.wv.most_similar("fashion")
 ```
 
 ```python
-model.wv.most_similar(positive=['food'] , negative=['natural'])
+model.wv.most_similar(positive=['food'] , negative=['healthy'])
 ```
 
 ```python
-model.wv.similar_by_vector(model.wv.get_vector('actor') + model.wv.get_vector('woman'), topn=15)
+model.wv.similar_by_vector(model.wv.get_vector('actress') + model.wv.get_vector('woman'), topn=15)
 ```
 
 ```python
@@ -96,10 +96,10 @@ iplot([go.Scatter(x=x_vals, y=y_vals, mode='text', text=labels)])
 
 ```python
 def representation(wv, caption):  # return the vector representation of caption
-    words = [wv.get_vector(w) for w in preprocess(caption) if w in wv.key_to_index]
-    if len(words) > 0:
-        v = np.sum(words, axis=0) / len(words)
-        return v
+    for w in caption.split():
+        if len(w) > 0 and w[0] == '#':
+            if w[1:] in wv.key_to_index:
+                return wv.get_vector(w[1:])
 ```
 
 ```python
@@ -114,10 +114,10 @@ def rm_tree(path):
 ```
 
 ```python
-rm_tree(dir_vectors)
-n_vectors = 10000 # to speed up training
+rm_tree(Dir.caption_vectors)
+n_vectors = 100000 # to speed up training
 
-for dir_city in dir_captions.iterdir():
+for dir_city in Dir.captions.iterdir():
     for n, file_caption in itertools.islice(enumerate(dir_city.iterdir()), n_vectors): 
         v = representation(model.wv, file_caption.read_text())
         if v is not None:
@@ -126,7 +126,7 @@ for dir_city in dir_captions.iterdir():
                 mode = "validate"
             if n >= .8*n_vectors:
                 mode = "test"
-            file = dir_vectors / f"{mode}/{dir_city.name}/{file_caption.name}"
+            file = Dir.caption_vectors / f"{mode}/{dir_city.name}/{file_caption.name}"
             Path(file.parent).mkdir(parents=True, exist_ok=True)
             np.savetxt(str(file), v)
 ```
