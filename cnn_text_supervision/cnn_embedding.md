@@ -44,7 +44,6 @@ import PIL
 
 class ImageDataset(torch.utils.data.Dataset):
     def __init__(self, mode): # mode is "train", "validate" or "test"
-        self.dir_images = dir_images
         self.dir_target = dir_caption_vectors / mode
         self.data = [f.relative_to(self.dir_target) 
                      for f in self.dir_target.rglob("*.txt")]
@@ -59,9 +58,9 @@ class ImageDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, i):
         f = self.data[i]
-        img = PIL.Image.open(self.dir_images / f.with_suffix(".jpg")).convert('RGB')
+        img = PIL.Image.open(dir_images / f.with_suffix(".jpg")).convert('RGB')
         caption_vector = torch.from_numpy(np.loadtxt(str(self.dir_target / f)))
-        return f.stem, self.preprocess(img).float(), caption_vector.float()
+        return str(f), self.preprocess(img).float(), caption_vector.float()
 ```
 
 ```python
@@ -107,7 +106,7 @@ for i, p in islice(enumerate(predictions), 5):
 ```python
 def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
     for epoch in range(1, num_epochs+1):
-        print(f"\nEpoch {epoch}/{num_epochs}")
+        print(f"Epoch {epoch}/{num_epochs}")
         for phase in ['validate', 'train']:
             running_loss = .0
             if phase == 'train': model.train()
@@ -129,34 +128,49 @@ def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
 resnet = torchvision.models.resnet18(pretrained=True)
 for param in resnet.parameters():
     param.requires_grad = False
+
 resnet.fc = torch.nn.Linear(resnet.fc.in_features, 40) # the model should output in the word vector space
 resnet = resnet.to(device)
-if torch.cuda.device_count() > 1:
-    resnet = torch.nn.DataParallel(resnet)
-
+    
 dataloaders = dict()
-for mode in "validate", "train":
+for mode in "validate", "train", "test":
     dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=10, num_workers=8, shuffle=True, pin_memory=True)
     print(f"{mode}: {len(dataloaders[mode])} batchs of size {dataloaders[mode].batch_size}")
-criterion = torch.nn.MSELoss(reduction='sum').to(device)
+```
+
+```python
+# criterion = torch.nn.BCEWithLogitsLoss().to(device)
+criterion = torch.nn.MSELoss(reduction="sum").to(device)
+# optimizer = torch.optim.SGD(resnet.fc.parameters(), .01, momentum=.9)
 optimizer = torch.optim.Adam(resnet.fc.parameters(), lr=0.01)
 # torch.optim.SGD(resnet.parameters(), .01, momentum=.9, weight_decay=1e-4)
-train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=5)
+train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=10)
 ```
 
 ```python
-for param in resnet.parameters():
-    param.requires_grad = True
-optimizer = torch.optim.Adam(resnet.parameters(), lr=0.001)
-exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
-train_model(resnet, device, criterion, optimizer, dataloaders, exp_lr_scheduler, num_epochs=5)
+# for param in resnet.parameters():
+#     param.requires_grad = True
+for m in list(resnet.modules())[-5:]:
+    m.requires_grad_(True)
+
+optimizer = torch.optim.Adam(resnet.parameters(), lr=1e-5)
+#exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=10)
 ```
 
 ```python
-for img_name, img, _ in dataloaders["validate"]:
-    vectors = model(img.to("cuda"))
+optimizer = torch.optim.Adam(resnet.parameters(), lr=1e-6)
+#exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=30)
+```
+
+```python
+for img_name, img, _ in dataloaders["test"]:
+    vectors = resnet(img.to("cuda")))
     for i, v in enumerate(vectors):
-        torch.save(v, dir_image_vectors / img_name[i])
+        path = dir_image_vectors / img_name[i]
+        path.parent.mkdir(exist_ok=True, parents=True)
+        torch.save(v, str(path))
 ```
 
 ```python
@@ -164,29 +178,27 @@ import heapq as hq
 from gensim.models import Word2Vec
 
 word2vec = Word2Vec.load(str(dir_word_embedding / "model_captions"))
-query_vector = torch.from_numpy(word2vec.wv.get_vector("sea")).to("cuda")
+query_vector = torch.from_numpy(word2vec.wv.get_vector("cake")).to("cuda")
 closest = []
 n_results = 5
 
-for img_name, img, _ in dataloaders["train"]:
-    vectors = resnet(img.to("cuda"))
-    for i, v in enumerate(vectors):
-        d = ((v - query_vector)**2).sum(axis=0).item()
-        if len(closest) < n_results:
-            hq.heappush(closest, (-d, id(v), img[i], v))
-        elif -closest[0][0] > d:
-            print(-closest[0][0])
-            hq.heappushpop(closest, (-d, id(v), img[i], v))
+for file_img in dir_image_vectors.rglob("*.txt"):
+    v = torch.load(file_img)
+    d = ((v - query_vector)**2).sum(axis=0).item()
+    if len(closest) < n_results:
+        hq.heappush(closest, (-d, file_img))
+    elif -closest[0][0] > d:
+        hq.heappushpop(closest, (-d, file_img))
 
 figure = plt.figure(figsize=(20, 4))
-for i, (nd, _, img, v) in enumerate(closest):
+for i, (nd, file_img) in enumerate(closest):
     figure.add_subplot(1, 5, i+1)
     plt.axis("off")
-    plt.imshow(img.permute(1, 2, 0).clip(.0, 1.))
+    path = dir_images / file_img.relative_to(dir_image_vectors).with_suffix(".jpg")
+    plt.imshow(PIL.Image.open(path).convert('RGB'))
     plt.title(str(-nd))
-    print(v - query_vector)
 ```
 
 ```python
-
+torch.save(resnet.state_dict(), "resnet")
 ```
