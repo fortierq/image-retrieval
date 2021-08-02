@@ -165,12 +165,14 @@ train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=30)
 ```
 
 ```python
-for img_name, img, _ in dataloaders["test"]:
-    vectors = resnet(img.to("cuda")))
-    for i, v in enumerate(vectors):
-        path = dir_image_vectors / img_name[i]
-        path.parent.mkdir(exist_ok=True, parents=True)
-        torch.save(v, str(path))
+with torch.no_grad():
+    resnet.eval()
+    for img_name, img, _ in dataloaders["test"]:
+        vectors = resnet(img.to("cuda"))
+        for i, v in enumerate(vectors):
+            path = dir_image_vectors / img_name[i]
+            path.parent.mkdir(exist_ok=True, parents=True)
+            torch.save(v, str(path))
 ```
 
 ```python
