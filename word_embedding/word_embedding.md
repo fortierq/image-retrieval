@@ -18,6 +18,7 @@ import itertools
 dir_root = Path().resolve().parent
 import sys; sys.path.append(str(dir_root))
 from settings import Dir, Params
+import utils
 ```
 
 ```python
@@ -29,21 +30,23 @@ def preprocess(w): # remove stop words, hashtags, non-ASCII and lower characters
 
 class Captions:  # iterator for captions
     def __iter__(self):
-        for f in Dir.captions.rglob("*.txt"):
+        for f in itertools.islice(Dir.captions.rglob("*.txt"), Params.samples):
             yield remove_useless(preprocess(f.read_text()).split())
 ```
 
 ```python
 for c in itertools.islice(Captions(), 5):
-    print(c)  # show some captions
+    print(c[:5])  # show some captions
 ```
 
-## Train a word2vec model
+## Train a word2vec modelitertools
 
 ```python
 model = Word2Vec(sentences=Captions(),
                  vector_size=Params.dim_embedding,
-                 min_count=10)
+                 min_count=10,
+                 workers=Params.workers
+                )
 model.save("model_captions")
 ```
 
@@ -103,32 +106,25 @@ def representation(wv, caption):  # return the vector representation of caption
 ```
 
 ```python
-def rm_tree(path):
-    if path.exists():
-        for child in path.glob('*'):
-            if child.is_file():
-                child.unlink()
-            else:
-                rm_tree(child)
-        path.rmdir()
-```
+utils.rm_dir(Dir.caption_vectors)
 
-```python
-rm_tree(Dir.caption_vectors)
-n_vectors = 100000 # to speed up training
+from multiprocessing import Pool
 
-for dir_city in Dir.captions.iterdir():
-    for n, file_caption in itertools.islice(enumerate(dir_city.iterdir()), n_vectors): 
+def save_embedding(dir):
+    for n, file_caption in itertools.islice(enumerate(dir.iterdir()), Params.samples): 
         v = representation(model.wv, file_caption.read_text())
         if v is not None:
             mode = "train"
-            if n > .7*n_vectors:
+            if n > .7*Params.samples:
                 mode = "validate"
-            if n >= .8*n_vectors:
+            if n >= .9*Params.samples:
                 mode = "test"
-            file = Dir.caption_vectors / f"{mode}/{dir_city.name}/{file_caption.name}"
+            file = Dir.caption_vectors / f"{mode}/{dir.name}/{file_caption.name}"
             Path(file.parent).mkdir(parents=True, exist_ok=True)
             np.savetxt(str(file), v)
+
+with Pool(Params.workers) as p:
+    p.map(save_embedding, Dir.captions.iterdir())
 ```
 
 ```python

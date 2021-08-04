@@ -4,16 +4,16 @@
 %load_ext autoreload
 %autoreload 2
 
-import matplotlib.pyplot as plt
-import PIL
 import torch, torchvision
 from pathlib import Path
 from itertools import islice
 import numpy as np
+import PIL
 
 dir_root = Path().resolve().parent
 import sys; sys.path.append(str(dir_root))
 from settings import Dir, Params
+import utils
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 device
@@ -22,30 +22,22 @@ device
 ## Data observation
 
 ```python
-from itertools import islice
-
-figure = plt.figure(figsize=(12, 12))
-for i, f in enumerate(islice(Dir.images.rglob("*.jpg"), 9)):
-    figure.add_subplot(3, 3, i+1)
-    plt.axis("off")
-    caption = (Dir.captions / f.relative_to(Dir.images).with_suffix(".txt")).read_text()
-    plt.title(caption[:30] + "\n" + caption[30:60])
-    plt.imshow(PIL.Image.open(f))
+utils.plots(Dir.images.rglob("*.jpg"),
+            lambda _, f: (Dir.captions / f.relative_to(Dir.images)
+                         .with_suffix(".txt")).read_text()[:40])
 ```
 
 ## Load dataset
 
 ```python
 import torchvision.transforms as transforms
-import PIL
 
 class ImageDataset(torch.utils.data.Dataset):
     def __init__(self, mode): # mode is "train", "validate" or "test"
         self.dir_target = Dir.caption_vectors / mode
-        self.data = [f.relative_to(self.dir_target) 
-                     for f in self.dir_target.rglob("*.txt")]
+        self.data = list(self.dir_target.rglob("*.txt"))
         self.preprocess = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
+#             transforms.RandomHorizontalFlip(),
             transforms.RandomCrop(224),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),  # ImageNet stats
@@ -54,17 +46,18 @@ class ImageDataset(torch.utils.data.Dataset):
     def __len__(self): return len(self.data)
 
     def __getitem__(self, i):
-        f = self.data[i]
-        img = PIL.Image.open(Dir.images / f.with_suffix(".jpg")).convert('RGB')
-        caption_vector = torch.from_numpy(np.loadtxt(str(self.dir_target / f)))
-        return str(f), self.preprocess(img).float(), caption_vector.float()
+        file_caption = self.data[i]
+        file_image = Dir.images / file_caption.relative_to(self.dir_target).with_suffix(".jpg")
+        image = PIL.Image.open(file_image).convert('RGB')
+        caption_vector = torch.from_numpy(np.loadtxt(str(file_caption)))
+        return self.preprocess(image).float(), caption_vector.float(), str(file_image), str(file_caption)
 ```
 
 ```python
-dataset = ImageDataset("train")
-print(f"Shape of an image: {dataset[0][1].shape}")
-print(f"Shape of an embedded caption vector: {dataset[0][2].shape}")
-ndim = dataset[0][1].shape[0]
+dataloaders = dict()
+for mode in "validate", "train", "test":
+    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=12, num_workers=Params.workers, shuffle=True, pin_memory=True)
+    print(f"{mode}: {len(dataloaders[mode])} batchs of size {dataloaders[mode].batch_size}")
 ```
 
 ## Use ResNet pretrained on ImageNet
@@ -73,29 +66,17 @@ ndim = dataset[0][1].shape[0]
 Let's see some predictions of the ResNet on our images:
 
 ```python
-!wget https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt
+import urllib
+urllib.request.urlretrieve("https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt", "imagenet_classes.txt")
 
-resnet = torchvision.models.resnet50(pretrained=True)
-dataloaders = dict()
-for mode in "validate", "train":
-    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=12, num_workers=8, shuffle=True, pin_memory=True)
-    print(f"{mode}: {len(dataloaders[mode])} batchs of size {dataloaders[mode].batch_size}")
-
-_, img, vector = next(iter(dataloaders["validate"]))
+resnet = torchvision.models.resnet34(pretrained=True)
+images, _, file_images, _ = next(iter(dataloaders["validate"]))
 with open("imagenet_classes.txt", "r") as f:
     categories = [s.strip() for s in f.readlines()]
-# Show top categories per image
-top5_prob, top5_catid = torch.topk(resnet(img)[0], 5)
-
-figure = plt.figure(figsize=(20, 4))
-predictions = resnet(img)
-for i, p in islice(enumerate(predictions), 5):
-    print(p[0])
-    figure.add_subplot(1, 5, i+1)
-    plt.axis("off")
-    top5_prob, top5_catid = torch.topk(p, 1)
-    plt.title(categories[top5_catid[0]])
-    plt.imshow(img[i].permute(1, 2, 0).clip(.0, 1.))
+predictions = resnet(images)
+utils.plots(file_images,
+            lambda i, _: categories[torch.topk(predictions[i], 1)[1][0]],
+            tensor_images=False)
 ```
 
 # Model Fine-tuning
@@ -111,7 +92,7 @@ def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
             running_loss = .0
             if phase == 'train': model.train()
             else: model.eval()
-            for _, inputs, labels in dataloaders[phase]:
+            for inputs, labels, _, _ in dataloaders[phase]:
                 inputs, labels = inputs.to(device), labels.to(device)
                 optimizer.zero_grad()
                 with torch.set_grad_enabled(phase == 'train'):
@@ -121,23 +102,19 @@ def train_model(model, device, criterion, optimizer, dataloaders, num_epochs=5):
                         loss.backward()
                         optimizer.step()
                 running_loss += loss.item()
-            writer.add_scalar("Epoch/loss", epoch, running_loss / len(dataloaders[phase]))
+            writer.add_scalar("Loss/" + "train" if phase == 'train' else "validate",
+                              running_loss / len(dataloaders[phase]), epoch)
             print(f"{phase} Loss: {running_loss / len(dataloaders[phase]):.4f}")
     writer.flush()
 ```
 
 ```python
-resnet = torchvision.models.resnet34(pretrained=True)
+resnet = torchvision.models.resnet18(pretrained=True)
 for param in resnet.parameters():
     param.requires_grad = False
 
-resnet.fc = torch.nn.Linear(resnet.fc.in_features, 40) # the model should output in the word vector space
+resnet.fc = torch.nn.Linear(resnet.fc.in_features, Params.dim_embedding) # the model should output in the word vector space
 resnet = resnet.to(device)
-    
-dataloaders = dict()
-for mode in "validate", "train", "test":
-    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=10, num_workers=8, shuffle=True, pin_memory=True)
-    print(f"{mode}: {len(dataloaders[mode])} batchs of size {dataloaders[mode].batch_size}")
 ```
 
 ```python
@@ -146,7 +123,7 @@ criterion = torch.nn.MSELoss(reduction="sum").to(device)
 # optimizer = torch.optim.SGD(resnet.fc.parameters(), .01, momentum=.9)
 optimizer = torch.optim.Adam(resnet.fc.parameters(), lr=0.01)
 # torch.optim.SGD(resnet.parameters(), .01, momentum=.9, weight_decay=1e-4)
-train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=1)
+train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=3)
 ```
 
 ```python
