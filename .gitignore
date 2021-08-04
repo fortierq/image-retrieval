@@ -3,3 +3,5 @@ data/
 **/vectors/
 *.pyc
 *.txt*
+*.jpg
+runs/

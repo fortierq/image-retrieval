@@ -57,7 +57,7 @@ class ImageDataset(torch.utils.data.Dataset):
 dataloaders = dict()
 for mode in "validate", "train", "test":
     dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=12, num_workers=Params.workers, shuffle=True, pin_memory=True)
-    print(f"{mode}: {len(dataloaders[mode])} batchs of size {dataloaders[mode].batch_size}")
+    print(f"{mode}: {len(dataloaders[mode])}x{dataloaders[mode].batch_size} = {len(dataloaders[mode])*dataloaders[mode].batch_size}")
 ```
 
 ## Use ResNet pretrained on ImageNet
@@ -75,8 +75,7 @@ with open("imagenet_classes.txt", "r") as f:
     categories = [s.strip() for s in f.readlines()]
 predictions = resnet(images)
 utils.plots(file_images,
-            lambda i, _: categories[torch.topk(predictions[i], 1)[1][0]],
-            tensor_images=False)
+            lambda i, _: categories[torch.topk(predictions[i], 1)[1][0]])
 ```
 
 # Model Fine-tuning
@@ -134,7 +133,7 @@ for m in list(resnet.modules())[-5:]:
 
 optimizer = torch.optim.Adam(resnet.parameters(), lr=1e-5)
 #exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
-train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=10)
+train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=2)
 ```
 
 ```python
@@ -146,16 +145,18 @@ train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=1)
 ```python
 torch.save({'model_state_dict': resnet.state_dict(),
             'optimizer_state_dict': optimizer.state_dict()}, 
-           "models/resnet18_.pt")
+            f"models/resnet18__{Params.dim_embedding}_{Params.samples}.pt")
 ```
 
 ```python
+utils.rm_dir(Dir.image_vectors)
+
 with torch.no_grad():
     resnet.eval()
-    for img_name, img, _ in dataloaders["test"]:
+    for img, _, img_name, _ in dataloaders["test"]:
         vectors = resnet(img.to("cuda"))
         for i, v in enumerate(vectors):
-            path = Dir.image_vectors / img_name[i]
+            path = Dir.image_vectors / Path(img_name[i]).relative_to(Dir.images)
             path.parent.mkdir(exist_ok=True, parents=True)
             torch.save(v, str(path))
 ```
@@ -164,12 +165,12 @@ with torch.no_grad():
 import heapq as hq
 from gensim.models import Word2Vec
 
-word2vec = Word2Vec.load(str(Dir.word_embedding / "model_captions"))
-query_vector = torch.from_numpy(word2vec.wv.get_vector("bridge")).to("cuda")
+word2vec = Word2Vec.load(str(Dir.model_embedding))
+query_vector = torch.from_numpy(word2vec.wv.get_vector("wedding")).to("cuda")
 closest = []
 n_results = 5
 
-for file_img in Dir.image_vectors.rglob("*.txt"):
+for file_img in Dir.image_vectors.rglob("*.jpg"):
     v = torch.load(file_img)
     d = ((v - query_vector)**2).sum(axis=0).item()
     if len(closest) < n_results:
@@ -177,15 +178,15 @@ for file_img in Dir.image_vectors.rglob("*.txt"):
     elif -closest[0][0] > d:
         hq.heappushpop(closest, (-d, file_img))
 
-figure = plt.figure(figsize=(20, 4))
-for i, (nd, file_img) in enumerate(closest):
-    figure.add_subplot(1, 5, i+1)
-    plt.axis("off")
-    path = Dir.images / file_img.relative_to(Dir.image_vectors).with_suffix(".jpg")
-    plt.imshow(PIL.Image.open(path).convert('RGB'))
-    plt.title(str(-nd))
+dist, images = zip(*closest)
+utils.plots([Dir.images / img.relative_to(Dir.image_vectors) for img in images],
+            lambda i, _: -dist[i])
 ```
 
 ```python
 torch.save(resnet.state_dict(), "resnet")
+```
+
+```python
+
 ```

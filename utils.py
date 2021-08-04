@@ -12,7 +12,7 @@ def rm_dir(path):  # delete a directory
                 rm_dir(child)
         path.rmdir()
 
-def plots(images, caption=None, n=5, tensor_images=False):
+def plots(images, caption=None, n=5):
     import warnings
     warnings.filterwarnings("ignore", message="Glyph.* missing from current font")
 
@@ -21,7 +21,4 @@ def plots(images, caption=None, n=5, tensor_images=False):
         figure.add_subplot(1, n, i+1)
         plt.axis("off")
         plt.title(caption(i, f))
-        if tensor_images:
-            plt.imshow(f.permute(1, 2, 0).clip(.0, 1.))
-        else:
-            plt.imshow(PIL.Image.open(f))
+        plt.imshow(PIL.Image.open(f))
