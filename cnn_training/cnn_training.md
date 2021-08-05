@@ -50,13 +50,13 @@ class ImageDataset(torch.utils.data.Dataset):
         file_image = Dir.images / file_caption.relative_to(self.dir_target).with_suffix(".jpg")
         image = PIL.Image.open(file_image).convert('RGB')
         caption_vector = torch.from_numpy(np.loadtxt(str(file_caption)))
-        return self.preprocess(image).to(torch.float16), caption_vector.to(torch.float16), str(file_image), str(file_caption)
+        return self.preprocess(image).float(), caption_vector.float(), str(file_image), str(file_caption)
 ```
 
 ```python
 dataloaders = dict()
 for mode in "train", "validate", "test":
-    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=12, num_workers=Params.workers, shuffle=True, pin_memory=True)
+    dataloaders[mode] = torch.utils.data.DataLoader(ImageDataset(mode), batch_size=64, num_workers=Params.workers, shuffle=True, pin_memory=True)
     print(f"{mode}: {len(dataloaders[mode])}x{dataloaders[mode].batch_size} = {len(dataloaders[mode])*dataloaders[mode].batch_size}")
 ```
 
@@ -82,26 +82,37 @@ utils.plots(file_images,
 
 ```python
 from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
 
-def train_model(model, device, criterion, optimizer, dataloaders, writer, num_epochs):
-    for epoch in range(1, num_epochs+1):
+def train_step(model, phase, device, criterion, dataloaders):
+    running_loss = .0
+    if phase == 'train': model.train()
+    else: model.eval()
+    for inputs, labels, _, _ in dataloaders[phase]:
+        inputs, labels = inputs.to(device), labels.to(device)
+        optimizer.zero_grad()
+        with torch.set_grad_enabled(phase == 'train'):
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            if phase == 'train':
+                loss.backward()
+                optimizer.step()
+        running_loss += loss.item()
+    return running_loss / len(dataloaders[phase])
+
+def train_model(model, device, criterion, optimizer, dataloaders, writer, num_epochs, start_epoch=0):
+    writer = SummaryWriter(f"runs/resnet18/lr=1e-5,layers=2,date={datetime.now()}")    
+    for epoch in range(start_epoch, start_epoch+num_epochs):
         for phase in ['validate', 'train']:
-            running_loss = .0
-            if phase == 'train': model.train()
-            else: model.eval()
-            for inputs, labels, _, _ in dataloaders[phase]:
-                inputs, labels = inputs.to(device), labels.to(device)
-                optimizer.zero_grad()
-                with torch.set_grad_enabled(phase == 'train'):
-                    outputs = model(inputs)
-                    loss = criterion(outputs, labels)
-                    if phase == 'train':
-                        loss.backward()
-                        optimizer.step()
-                running_loss += loss.item()
-            loss_val = running_loss / len(dataloaders[phase])
-            writer.add_scalar("Loss/" + ("train" if phase == 'train' else "validate"), loss_val, epoch)
-            print(f"Epoch {epoch}/{num_epochs} {phase} Loss: {loss_val:.4f}")
+            avg_loss = train_step(model, phase, device, criterion, dataloaders)
+            writer.add_scalar("Loss/" + ("train" if phase == 'train' else "validate"), avg_loss, epoch)
+            if phase == "validate":
+                save_image_vectors()
+                for query in ["dog", "bridge", "hair", "car", "food", "beach"]:
+                    writer.add_images(f"Top 5 images for query: {query}", 
+                                      plot_closest(query, word2vec.wv), epoch, dataformats="HWC")                
+            writer.flush()
+            print(f"Epoch {epoch}/{start_epoch+num_epochs-1} {phase} Loss: {avg_loss:.4f}")
 ```
 
 ```python
@@ -110,8 +121,7 @@ for param in resnet.parameters():
     param.requires_grad = False
 
 resnet.fc = torch.nn.Linear(resnet.fc.in_features, Params.dim_embedding) # the model should output in the word vector space
-resnet = resnet.to(device).to(torch.float16)
-writer = SummaryWriter('runs/resnet18')
+resnet = resnet.to(device)
 ```
 
 ```python
@@ -124,14 +134,12 @@ train_model(resnet, device, criterion, optimizer, dataloaders, writer, num_epoch
 ```
 
 ```python
-# for param in resnet.parameters():
-#     param.requires_grad = True
-for m in list(resnet.modules())[-4:]:
+for m in list(resnet.modules())[-5:]:
     m.requires_grad_(True)
 
-optimizer = torch.optim.Adam(resnet.parameters(), lr=1e-5)
-#exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
-train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=2)
+criterion = torch.nn.MSELoss(reduction="mean").to(device)
+optimizer = torch.optim.AdamW(resnet.parameters(), lr=1e-5)
+train_model(resnet, device, criterion, optimizer, dataloaders, writer, num_epochs=10)
 ```
 
 ```python
@@ -146,16 +154,12 @@ resnet.load_state_dict(state_dict["model_state_dict"])
 ```
 
 ```python
-resnet = resnet.to(torch.float16)
-```
-
-```python
 for m in list(resnet.modules())[-7:]:
     m.requires_grad_(True)
 
-optimizer = torch.optim.Adam(resnet.parameters(), lr=1e-4)
+optimizer = torch.optim.Adam(resnet.parameters(), lr=1e-5)
 #exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
-train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=2)
+train_model(resnet, device, criterion, optimizer, dataloaders, writer, num_epochs=3, start_epoch=18)
 ```
 
 ```python
@@ -165,23 +169,21 @@ train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=1)
 ```
 
 ```python
-utils.rm_dir(Dir.image_vectors)
-
-with torch.no_grad():
-    resnet.eval()
-    for img, _, img_name, _ in dataloaders["validate"]:
-        vectors = resnet(img.to("cuda"))
-        for i, v in enumerate(vectors):
-            path = Dir.image_vectors / Path(img_name[i]).relative_to(Dir.images)
-            path.parent.mkdir(exist_ok=True, parents=True)
-            torch.save(v, str(path))
-```
-
-```python
 import heapq as hq
 from gensim.models import Word2Vec
 
 word2vec = Word2Vec.load(str(Dir.model_embedding))
+
+def save_image_vectors():
+    utils.rm_dir(Dir.image_vectors)
+    with torch.no_grad():
+        resnet.eval()
+        for img, _, img_name, _ in dataloaders["test"]:
+            vectors = resnet(img.to("cuda"))
+            for i, v in enumerate(vectors):
+                path = Dir.image_vectors / Path(img_name[i]).relative_to(Dir.images)
+                path.parent.mkdir(exist_ok=True, parents=True)
+                torch.save(v, str(path))
 
 def plot_closest(query, wv):
     query_vector = torch.from_numpy(wv.get_vector(query)).to("cuda")
@@ -196,16 +198,14 @@ def plot_closest(query, wv):
         elif -closest[0][0] > d:
             hq.heappushpop(closest, (-d, file_img))
 
-    dist, images = zip(*closest)
-    return utils.plots([Dir.images / img.relative_to(Dir.image_vectors) for img in images],
-                lambda i, _: -dist[i])
+    dist, images = zip(*sorted(closest, key=lambda x: -x[0]))
+    return utils.plots([Dir.images / img.relative_to(Dir.image_vectors) for img in images], lambda i, _: -dist[i])
 ```
 
 ```python
 query = "hair"
 
-writer.add_figure(f"Closest images to {query}", 
-                  plot_closest(query, word2vec.wv), 1)
+writer.add_figure(f"Closest images to {query}", plot_closest(query, word2vec.wv), 21)
 ```
 
 ```python
