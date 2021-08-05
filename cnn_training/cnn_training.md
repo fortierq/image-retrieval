@@ -24,7 +24,7 @@ device
 ```python
 utils.plots(Dir.images.rglob("*.jpg"),
             lambda _, f: (Dir.captions / f.relative_to(Dir.images)
-                         .with_suffix(".txt")).read_text()[:40]);
+                         .with_suffix(".txt")).read_text()[:40])
 ```
 
 ## Load dataset
@@ -81,6 +81,40 @@ utils.plots(file_images,
 # Model Fine-tuning
 
 ```python
+import heapq as hq
+from gensim.models import Word2Vec
+
+word2vec = Word2Vec.load(str(Dir.model_embedding))
+
+def save_image_vectors():
+    utils.rm_dir(Dir.image_vectors)
+    with torch.no_grad():
+        resnet.eval()
+        for img, _, img_name, _ in dataloaders["test"]:
+            vectors = resnet(img.to("cuda"))
+            for i, v in enumerate(vectors):
+                path = Dir.image_vectors / Path(img_name[i]).relative_to(Dir.images)
+                path.parent.mkdir(exist_ok=True, parents=True)
+                torch.save(v, str(path))
+
+def plot_closest(query, wv):
+    query_vector = torch.from_numpy(wv.get_vector(query)).to("cuda")
+    closest = []
+    n_results = 5
+
+    for file_img in Dir.image_vectors.rglob("*.jpg"):
+        v = torch.load(file_img)
+        d = ((v - query_vector)**2).sum(axis=0).item()
+        if len(closest) < n_results:
+            hq.heappush(closest, (-d, file_img))
+        elif -closest[0][0] > d:
+            hq.heappushpop(closest, (-d, file_img))
+
+    dist, images = zip(*sorted(closest, key=lambda x: -x[0]))
+    return utils.plots([Dir.images / img.relative_to(Dir.image_vectors) for img in images], lambda i, _: -dist[i])
+```
+
+```python
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 
@@ -109,8 +143,7 @@ def train_model(model, device, criterion, optimizer, dataloaders, writer, num_ep
             if phase == "validate":
                 save_image_vectors()
                 for query in ["dog", "bridge", "hair", "car", "food", "beach"]:
-                    writer.add_images(f"Top 5 images for query: {query}", 
-                                      plot_closest(query, word2vec.wv), epoch, dataformats="HWC")                
+                    writer.add_figure(f"Top 5 images for query: {query}", plot_closest(query, word2vec.wv), epoch)                
             writer.flush()
             print(f"Epoch {epoch}/{start_epoch+num_epochs-1} {phase} Loss: {avg_loss:.4f}")
 ```
@@ -166,40 +199,6 @@ train_model(resnet, device, criterion, optimizer, dataloaders, writer, num_epoch
 optimizer = torch.optim.Adam(resnet.parameters(), lr=1e-6)
 #exp_lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 train_model(resnet, device, criterion, optimizer, dataloaders, num_epochs=1)
-```
-
-```python
-import heapq as hq
-from gensim.models import Word2Vec
-
-word2vec = Word2Vec.load(str(Dir.model_embedding))
-
-def save_image_vectors():
-    utils.rm_dir(Dir.image_vectors)
-    with torch.no_grad():
-        resnet.eval()
-        for img, _, img_name, _ in dataloaders["test"]:
-            vectors = resnet(img.to("cuda"))
-            for i, v in enumerate(vectors):
-                path = Dir.image_vectors / Path(img_name[i]).relative_to(Dir.images)
-                path.parent.mkdir(exist_ok=True, parents=True)
-                torch.save(v, str(path))
-
-def plot_closest(query, wv):
-    query_vector = torch.from_numpy(wv.get_vector(query)).to("cuda")
-    closest = []
-    n_results = 5
-
-    for file_img in Dir.image_vectors.rglob("*.jpg"):
-        v = torch.load(file_img)
-        d = ((v - query_vector)**2).sum(axis=0).item()
-        if len(closest) < n_results:
-            hq.heappush(closest, (-d, file_img))
-        elif -closest[0][0] > d:
-            hq.heappushpop(closest, (-d, file_img))
-
-    dist, images = zip(*sorted(closest, key=lambda x: -x[0]))
-    return utils.plots([Dir.images / img.relative_to(Dir.image_vectors) for img in images], lambda i, _: -dist[i])
 ```
 
 ```python
