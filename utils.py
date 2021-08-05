@@ -12,17 +12,17 @@ def rm_dir(path):  # delete a directory
                 rm_dir(child)
         path.rmdir()
 
-def plots(image_rows, captions, n=5):
+def plots(images, caption=None, n=5):
     import warnings
     warnings.filterwarnings("ignore", message="Glyph.* missing from current font")
 
-    fig = plt.figure(figsize=(5*n, len(images)*20))
+    fig = plt.figure(figsize=(5*n, 20))
     plt.tight_layout()
-    for r, images in enumerate(image_rows):
-        for i, f in enumerate(islice(images, n)):
-            ax = fig.add_subplot(r+1, n, i+1)
-            ax.axis("off")
-            ax.set_title(caption(i, f))
-            plt.imshow(plt.imread(f))
+    for i, f in enumerate(islice(images, n)):
+        ax = fig.add_subplot(1, n, i+1, aspect = 'equal')
+        plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
+        ax.axis("off")
+        ax.set_title(caption(i, f))
+        plt.imshow(plt.imread(f))
     plt.close()
     return fig
