@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[1]))
 import numpy as np
 
 from settings import Dir, Params
-from cnn_training.plot_results import plot_closest
+from results.results import plot_closest
 
 st.title('Image retrieval')
 

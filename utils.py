@@ -16,14 +16,12 @@ def plots(images, caption=None, n=5):
     import warnings
     warnings.filterwarnings("ignore", message="Glyph.* missing from current font")
 
-    fig = plt.figure(figsize=(5*n, 20))
-    plt.tight_layout()
+    fig = plt.figure(figsize=(5*n, 5))
     for i, f in enumerate(islice(images, n)):
-        ax = fig.add_subplot(1, n, i+1, aspect = 'equal')
+        ax = fig.add_subplot(1, n, i+1)
         plt.subplots_adjust(left=0, bottom=0, right=1, top=1, wspace=0, hspace=0)
         ax.axis("off")
         ax.set_title(caption(i, f))
-        plt.imshow(plt.imread(f))
-    plt.savefig('app/images.png')
+        plt.imshow(plt.imread(f), )
     plt.close()
     return fig
