@@ -19,9 +19,9 @@ class Dir:
     captions = data / "captions"
     images = data / "images"
     
-    word_embedding = root / "word_embedding"
-    caption_vectors = word_embedding / "vectors"
-    model_word_embedding = word_embedding / "model" / f"word2vec_{Params.dim_embedding}_{Params.samples}"
+    embed_words = root / "embed_words"
+    caption_vectors = embed_words / "vectors"
+    model_embed_words = embed_words / "model" / f"word2vec_{Params.dim_embedding}_{Params.samples}"
     
-    model_cnn = root / "cnn_training" / "models" / "resnet18_ny.pt"
-    image_vectors = root / "cnn_training" / "vectors"
+    model_cnn = root / "embed_images" / "models" / "resnet18_ny.pt"
+    image_vectors = root / "embed_images" / "vectors"

@@ -47,11 +47,11 @@ model = Word2Vec(sentences=Captions(),
                  min_count=10,
                  workers=Params.workers
                 )
-model.save(Dir.model_word_embedding)
+model.save(Dir.model_embed_words)
 ```
 
 ```python
-model = Word2Vec.load(Dir.model_word_embedding)
+model = Word2Vec.load(Dir.model_embed_words)
 ```
 
 ```python

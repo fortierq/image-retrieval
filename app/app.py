@@ -6,14 +6,14 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[1]))
 import numpy as np
 
 from settings import Dir, Params
-from results.results import plot_closest
+from retrieve_images.retrieve_images import plot_closest
 
 st.title('Image retrieval')
 
 query = st.text_input('Query', 'hair')
 st.write('The current movie title is', query)
 
-state_dict = torch.load(f"cnn_training/models/resnet18_ny.pt")
+state_dict = torch.load(f"embed_images/models/resnet18_ny.pt")
 resnet = torchvision.models.resnet18()
 resnet.fc = torch.nn.Linear(resnet.fc.in_features, Params.dim_embedding) # the model should output in the word vector space
 resnet = resnet.to("cuda")

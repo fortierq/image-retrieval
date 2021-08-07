@@ -83,7 +83,7 @@ utils.plots(file_images,
 ```python
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
-from plot_results import save_image_vectors, plot_closest
+from plot_retrieve_images import save_image_vectors, plot_closest
 
 def train_step(model, phase, device, criterion, dataloaders):
     running_loss = .0
