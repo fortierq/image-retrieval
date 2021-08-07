@@ -39,7 +39,7 @@ for c in itertools.islice(Captions(), 5):
     print(c[:5])  # show some captions
 ```
 
-## Train a word2vec modelitertools
+## Train a word2vec model
 
 ```python
 model = Word2Vec(sentences=Captions(),
@@ -47,11 +47,11 @@ model = Word2Vec(sentences=Captions(),
                  min_count=10,
                  workers=Params.workers
                 )
-model.save("model_captions")
+model.save(Dir.model_word_embedding)
 ```
 
 ```python
-model = Word2Vec.load("model_captions")
+model = Word2Vec.load(Dir.model_word_embedding)
 ```
 
 ```python
@@ -117,7 +117,7 @@ def save_embedding(dir):
             mode = "train"
             if n > .7*Params.samples:
                 mode = "validate"
-            if n >= .9*Params.samples:
+            if n >= .8*Params.samples:
                 mode = "test"
             file = Dir.caption_vectors / f"{mode}/{dir.name}/{file_caption.name}"
             Path(file.parent).mkdir(parents=True, exist_ok=True)

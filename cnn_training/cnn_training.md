@@ -81,42 +81,9 @@ utils.plots(file_images,
 # Model Fine-tuning
 
 ```python
-import heapq as hq
-from gensim.models import Word2Vec
-
-word2vec = Word2Vec.load(str(Dir.model_embedding))
-
-def save_image_vectors():
-    utils.rm_dir(Dir.image_vectors)
-    with torch.no_grad():
-        resnet.eval()
-        for img, _, img_name, _ in dataloaders["test"]:
-            vectors = resnet(img.to("cuda"))
-            for i, v in enumerate(vectors):
-                path = Dir.image_vectors / Path(img_name[i]).relative_to(Dir.images)
-                path.parent.mkdir(exist_ok=True, parents=True)
-                torch.save(v, str(path))
-
-def plot_closest(query, wv):
-    query_vector = torch.from_numpy(wv.get_vector(query)).to("cuda")
-    closest = []
-    n_results = 5
-
-    for file_img in Dir.image_vectors.rglob("*.jpg"):
-        v = torch.load(file_img)
-        d = ((v - query_vector)**2).sum(axis=0).item()
-        if len(closest) < n_results:
-            hq.heappush(closest, (-d, file_img))
-        elif -closest[0][0] > d:
-            hq.heappushpop(closest, (-d, file_img))
-
-    dist, images = zip(*sorted(closest, key=lambda x: -x[0]))
-    return utils.plots([Dir.images / img.relative_to(Dir.image_vectors) for img in images], lambda i, _: -dist[i])
-```
-
-```python
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
+from plot_results import save_image_vectors, plot_closest
 
 def train_step(model, phase, device, criterion, dataloaders):
     running_loss = .0
@@ -182,7 +149,7 @@ torch.save({'model_state_dict': resnet.state_dict(),
 ```
 
 ```python
-state_dict = torch.load(f"models/resnet18__{Params.dim_embedding}_{Params.samples}.pt")
+state_dict = torch.load(Params.model_cnn)
 resnet.load_state_dict(state_dict["model_state_dict"])
 ```
 

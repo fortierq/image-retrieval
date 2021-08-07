@@ -24,5 +24,6 @@ def plots(images, caption=None, n=5):
         ax.axis("off")
         ax.set_title(caption(i, f))
         plt.imshow(plt.imread(f))
+    plt.savefig('app/images.png')
     plt.close()
     return fig
